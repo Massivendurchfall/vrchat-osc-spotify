@@ -32,12 +32,12 @@ Setup
 Anzeige & Template
 - Platzhalter: {prefix} {title} {artist} {sep} {bar} {position} {duration} {elapsed} {remaining} {newline}
 - {newline} fügt einen Zeilenumbruch an dieser Stelle ein.
-- Titel/Künstler in einer Zeile; Timestamp optional in eigener Zeile („Timestamp on 2nd line“).
-- Progress style: ascii / unicode / hud (HUD-Style mit Zeiten links/rechts in der Bar).
+- Progress style: ascii / unicode / hud (HUD-Style mit Zeiten links/rechts).
+- HUD „Transparent“ (Toggle): Leere Barsegmente sind Leerzeichen → wirkt wie Overlay.
 - Progress bar: per „Progress bar“ ein-/ausblenden. Bar length = Länge.
 - „Clamp long title/artist“ begrenzt Länge (Ellipsis), damit andere Infos sichtbar bleiben.
-- Unicode benötigt „Strip non-ASCII“ aus.
-- Max. Länge pro Chat-Nachricht: 144 Zeichen (pro Zeile, längere Zeilen werden gekürzt).
+- Für Unicode/HUD bitte „Strip non-ASCII“ aus lassen (Standard: aus).
+- Max. Länge pro Chat-Zeile: 144 Zeichen (längere Zeilen werden gekürzt).
 
 Rotation
 - Enable rotation → wechselt die Einträge im Intervall.
@@ -53,8 +53,9 @@ PC Specs (extra line)
 - Format: CPU 12% | RAM 8.2/32 GB (26%) | GPU 34%
 
 AFK
-- Anti-AFK: periodischer Jump.
-- AFK Tagger: setzt z. B. [AFK] ans Ende der ersten Zeile, wenn du X Sekunden inaktiv bist (System-Idle).
+- Anti-AFK: periodischer Pulse (Modus: Jump/Wiggle).
+- AFK Tagger: setzt z. B. [AFK] ans Ende der ersten Zeile, wenn du X Sekunden am PC inaktiv bist (Windows-Idle).
+  (Eigener Schalter – unabhängig vom Anti-AFK.)
 
 Quick Tests
 - Send Test / Typing 3s / Jump.
@@ -68,7 +69,7 @@ Troubleshooting
 - Nichts im Chat? In VRChat Chatbox einblenden und OSC aktivieren. IP/Port prüfen.
 - 401/Refresh-Fehler: „Clear Tokens“ und neu bei Spotify anmelden.
 - 400 bei Token: Redirect URI exakt wie angezeigt verwenden.
-- Unicode/zu lange Texte: ggf. „Strip non-ASCII“ an, Bar-Länge und Clamp-Limits anpassen.
+- Unicode/zu lange Texte: ggf. Bar-Länge & Clamp-Limits anpassen.
 
 Chatbox-Sound
 - „Chat sound“ schaltet den Sound bei Nachrichten an/aus.
@@ -97,15 +98,15 @@ APP_DEFAULTS = {
     "prefix": True,
     "prefix_text": "Spotify:",
     "sep_title_artist": " – ",
-    "progress_style": "ascii",
+    "progress_style": "hud",  # hud zeigt Zeiten links/rechts
     "show_title": True,
     "show_artist": True,
     "show_time": True,
     "time_mode": "both",
-    "time_on_second_line": True,
-    "ascii_only": True,
+    "time_on_second_line": False,   # mit HUD meist nicht nötig
+    "ascii_only": False,            # Standard: Umlaute/Unicode erlaubt
     "only_changes": True,
-    "template": "{prefix} {title}{sep}{artist} {bar} {position}/{duration}",
+    "template": "{prefix} {title}{sep}{artist} {newline}{bar} {position}{duration}",
 
     "rotation_enabled": True,
     "rotation_interval": 6,
@@ -121,6 +122,7 @@ APP_DEFAULTS = {
 
     "anti_afk_enabled": False,
     "anti_afk_interval": 240,
+    "anti_afk_mode": "jump",        # jump | wiggle
 
     "show_specs_line": False,
     "show_specs_cpu": True,
@@ -136,7 +138,8 @@ APP_DEFAULTS = {
     "afk_tag_after": 120,
     "afk_tag_text": "[AFK]",
 
-    "chat_sound": True
+    "chat_sound": True,
+    "hud_transparent": True         # leere Segmente sind Leerzeichen
 }
 
 def _data_dir():
@@ -282,7 +285,7 @@ def ms_to_clock(ms):
     s = int(ms // 1000); m = s // 60; s = s % 60
     return f"{m}:{s:02d}"
 
-def build_bar(position_ms, duration_ms, length_chars, style="ascii", ascii_only=True, inline_times=True):
+def build_bar(position_ms, duration_ms, length_chars, style="ascii", ascii_only=True, inline_times=True, hud_transparent=False):
     if duration_ms <= 0:
         core = "-" * length_chars
         if style == "hud" and not ascii_only and inline_times:
@@ -293,15 +296,12 @@ def build_bar(position_ms, duration_ms, length_chars, style="ascii", ascii_only=
     if style == "hud":
         if ascii_only:
             bar = "#" * filled + "-" * (length_chars - filled)
-            if inline_times:
-                return f"{ms_to_clock(position_ms)} [{bar}] {ms_to_clock(duration_ms)}"
-            return "[" + bar + "]"
+            return (f"{ms_to_clock(position_ms)} [{bar}] {ms_to_clock(duration_ms)}") if inline_times else "[" + bar + "]"
+        # Unicode HUD
         fill = "▉"
-        empty = "░"
+        empty = " " if hud_transparent else "░"
         bar = fill * filled + empty * (length_chars - filled)
-        if inline_times:
-            return f"{ms_to_clock(position_ms)} {bar} {ms_to_clock(duration_ms)}"
-        return bar
+        return (f"{ms_to_clock(position_ms)} {bar} {ms_to_clock(duration_ms)}") if inline_times else bar
     if style == "unicode" and not ascii_only:
         left = "│"; right = "│"; fill = "█"; empty = "░"
         return left + fill * filled + empty * (length_chars - filled) + right
@@ -423,7 +423,7 @@ class App(ctk.CTk):
         ctk.set_appearance_mode("system")
         ctk.set_default_color_theme("green")
         self.title("VRChat Spotify Status")
-        self.geometry("1320x900")
+        self.geometry("1520x900")
         self.resizable(False, False)
         self.cfg = config_load()
         self.tokens = token_store_load()
@@ -496,9 +496,12 @@ class App(ctk.CTk):
         ctk.CTkLabel(anti, text="Anti-AFK").grid(row=0, column=0, sticky="w")
         self.var_afk_enabled = ctk.BooleanVar(value=self.cfg["anti_afk_enabled"])
         self.var_afk_interval = ctk.StringVar(value=str(self.cfg["anti_afk_interval"]))
+        self.var_afk_mode = ctk.StringVar(value=self.cfg.get("anti_afk_mode","jump"))
         ctk.CTkCheckBox(anti, text="Enable", variable=self.var_afk_enabled).grid(row=0, column=1, padx=(12,6))
-        ctk.CTkLabel(anti, text="Jump every (s)").grid(row=0, column=2, padx=(18,6))
-        ctk.CTkEntry(anti, width=120, textvariable=self.var_afk_interval).grid(row=0, column=3)
+        ctk.CTkLabel(anti, text="Every (s)").grid(row=0, column=2, padx=(18,6))
+        ctk.CTkEntry(anti, width=90, textvariable=self.var_afk_interval).grid(row=0, column=3)
+        ctk.CTkLabel(anti, text="Mode").grid(row=0, column=4, padx=(18,6))
+        ctk.CTkOptionMenu(anti, values=["jump","wiggle"], variable=self.var_afk_mode, width=110).grid(row=0, column=5)
 
         tests = ctk.CTkFrame(left); tests.pack(fill="x", padx=12, pady=(8,8))
         ctk.CTkLabel(tests, text="Quick tests", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w")
@@ -515,6 +518,7 @@ class App(ctk.CTk):
         tabs.grid(row=0, column=1, sticky="nsew", padx=(8,12), pady=(12,8))
         tab_display = tabs.add("Display"); tab_rotate = tabs.add("Rotator"); tab_help = tabs.add("Help")
 
+        # Display Vars
         self.var_prefix = ctk.BooleanVar(value=self.cfg["prefix"])
         self.var_prefix_text = ctk.StringVar(value=self.cfg["prefix_text"])
         self.var_sep = ctk.StringVar(value=self.cfg["sep_title_artist"])
@@ -551,7 +555,9 @@ class App(ctk.CTk):
         self.var_afk_tag_text = ctk.StringVar(value=self.cfg["afk_tag_text"])
 
         self.var_chat_sound = ctk.BooleanVar(value=self.cfg.get("chat_sound", True))
+        self.var_hud_transparent = ctk.BooleanVar(value=self.cfg.get("hud_transparent", True))
 
+        # --- Display UI ---
         look = ctk.CTkFrame(tab_display); look.pack(fill="x", padx=12, pady=(12,8))
         ctk.CTkCheckBox(look, text='Show prefix', variable=self.var_prefix).grid(row=0, column=0, padx=6, pady=4, sticky="w")
         ctk.CTkLabel(look, text="Prefix text").grid(row=0, column=1, sticky="e", padx=(18,6))
@@ -572,6 +578,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(opt, text="Bar length").grid(row=1, column=2, sticky="e", padx=(18,6))
         ctk.CTkEntry(opt, width=110, textvariable=self.var_bar_len).grid(row=1, column=3, sticky="w")
         ctk.CTkCheckBox(opt, text="Chat sound", variable=self.var_chat_sound).grid(row=1, column=4, padx=6, pady=4, sticky="w")
+        ctk.CTkCheckBox(opt, text="HUD transparent", variable=self.var_hud_transparent).grid(row=1, column=5, padx=6, pady=4, sticky="w")
 
         clampf = ctk.CTkFrame(tab_display); clampf.pack(fill="x", padx=12, pady=(6,8))
         ctk.CTkCheckBox(clampf, text="Clamp long title/artist", variable=self.var_clamp_long).grid(row=0, column=0, padx=6, pady=4, sticky="w")
@@ -607,6 +614,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(tab_display, text="Preview").pack(anchor="w", padx=12)
         ctk.CTkLabel(tab_display, textvariable=self.var_preview, wraplength=790, justify="left").pack(fill="x", padx=12, pady=(0,12))
 
+        # Rotator
         self.var_rot_enabled = ctk.BooleanVar(value=self.cfg["rotation_enabled"])
         self.var_rot_interval = ctk.StringVar(value=str(self.cfg["rotation_interval"]))
         self.var_rot_mode = ctk.StringVar(value=self.cfg.get("rotation_mode", "twoline"))
@@ -696,7 +704,7 @@ class App(ctk.CTk):
             self.var_rot_interval, self.var_prefix_text, self.var_sep,
             self.var_progress_style, self.var_clock_prefix, self.var_afk_interval,
             self.var_max_title, self.var_max_artist, self.var_afk_tag_after,
-            self.var_afk_tag_text
+            self.var_afk_tag_text, self.var_afk_mode
         ):
             v.trace_add("write", save)
         for v in (
@@ -705,7 +713,7 @@ class App(ctk.CTk):
             self.var_clock_line, self.var_clock_24h, self.var_afk_enabled, self.var_show_bar,
             self.var_specs_line, self.var_specs_cpu, self.var_specs_ram, self.var_specs_gpu,
             self.var_specs_ram_gb, self.var_clamp_long, self.var_afk_tag_enabled,
-            self.var_chat_sound
+            self.var_chat_sound, self.var_hud_transparent
         ):
             v.trace_add("write", save)
 
@@ -743,6 +751,7 @@ class App(ctk.CTk):
 
             "anti_afk_enabled": bool(self.var_afk_enabled.get()),
             "anti_afk_interval": self.get_int(self.var_afk_interval, self.cfg.get("anti_afk_interval", 240), 5, 3600),
+            "anti_afk_mode": self.var_afk_mode.get(),
 
             "show_specs_line": bool(self.var_specs_line.get()),
             "show_specs_cpu": bool(self.var_specs_cpu.get()),
@@ -758,7 +767,8 @@ class App(ctk.CTk):
             "afk_tag_after": self.get_int(self.var_afk_tag_after, self.cfg.get("afk_tag_after", 120), 10, 36000),
             "afk_tag_text": self.var_afk_tag_text.get().strip() or "[AFK]",
 
-            "chat_sound": bool(self.var_chat_sound.get())
+            "chat_sound": bool(self.var_chat_sound.get()),
+            "hud_transparent": bool(self.var_hud_transparent.get())
         }
         config_save(cfg); self.cfg = cfg
 
@@ -782,6 +792,7 @@ class App(ctk.CTk):
             self.var_clock_line.set(self.cfg["show_clock_line"])
             self.var_clock_24h.set(self.cfg["clock_24h"]); self.var_clock_prefix.set(self.cfg["clock_prefix"])
             self.var_afk_enabled.set(self.cfg["anti_afk_enabled"]); self.var_afk_interval.set(str(self.cfg["anti_afk_interval"]))
+            self.var_afk_mode.set(self.cfg["anti_afk_mode"])
             self.var_specs_line.set(self.cfg["show_specs_line"])
             self.var_specs_cpu.set(self.cfg["show_specs_cpu"]); self.var_specs_ram.set(self.cfg["show_specs_ram"]); self.var_specs_gpu.set(self.cfg["show_specs_gpu"])
             self.var_specs_ram_gb.set(self.cfg["ram_in_gb"])
@@ -791,6 +802,7 @@ class App(ctk.CTk):
             self.var_afk_tag_after.set(str(self.cfg["afk_tag_after"]))
             self.var_afk_tag_text.set(self.cfg["afk_tag_text"])
             self.var_chat_sound.set(self.cfg["chat_sound"])
+            self.var_hud_transparent.set(self.cfg["hud_transparent"])
             self.rotation_items = list(self.cfg["rotation_items"])
             self._refresh_rot_list(); self._update_preview(); self._save_config()
             self._log("Config reset")
@@ -819,6 +831,37 @@ class App(ctk.CTk):
             port = self.get_int(self.var_port, self.cfg.get("port", 9000), 1, 65535)
             self.osc = SimpleUDPClient(self.var_ip.get().strip(), port)
 
+    # ---- Input helpers ----
+    def _send_jump(self):
+        try:
+            self._ensure_osc()
+            # bool pulse (kompatibler als ints)
+            self.osc.send_message(INPUT_JUMP, [True])
+            time.sleep(0.1)
+            self.osc.send_message(INPUT_JUMP, [False])
+            return True
+        except Exception as e:
+            self._log(f"Jump error: {e}"); return False
+
+    def _send_wiggle(self):
+        """kleiner Vorwärts-Impuls als Anti-AFK-Alternative"""
+        try:
+            self._ensure_osc()
+            for path in ("/input/Vertical", "/input/MoveForward"):  # eins davon greift je nach Build
+                try:
+                    self.osc.send_message(path, 1.0)
+                except Exception:
+                    pass
+            time.sleep(0.12)
+            for path in ("/input/Vertical", "/input/MoveForward"):
+                try:
+                    self.osc.send_message(path, 0.0)
+                except Exception:
+                    pass
+            return True
+        except Exception as e:
+            self._log(f"Wiggle error: {e}"); return False
+
     def _send_chatbox_raw(self, text):
         self._ensure_osc()
         try:
@@ -839,12 +882,7 @@ class App(ctk.CTk):
         except Exception as e:
             self._log(f"Typing error: {e}"); return False
 
-    def _send_jump(self):
-        try:
-            self._ensure_osc(); self.osc.send_message(INPUT_JUMP, 1); time.sleep(0.08); self.osc.send_message(INPUT_JUMP, 0); return True
-        except Exception as e:
-            self._log(f"Jump error: {e}"); return False
-
+    # ---- UI test buttons ----
     def _on_test(self):
         main, time_line = self._render_spotify_lines(self.last_item, self.last_progress, self.last_duration)
         final = self._compose_full(main, time_line)
@@ -865,6 +903,7 @@ class App(ctk.CTk):
     def _reset_template(self):
         self.var_template.set(APP_DEFAULTS["template"]); self._save_config(); self._update_preview()
 
+    # ---- Renderers ----
     def _apply_clamp(self, title, artist):
         if not self.var_clamp_long.get():
             return title, artist
@@ -873,8 +912,7 @@ class App(ctk.CTk):
         return shorten(title, mt), shorten(artist, ma)
 
     def _render_spotify_lines(self, item, progress_ms, duration_ms):
-        tpl = self.var_template.get().strip() or APP_DEFAULTS["template"]
-        tpl = tpl.replace("{newline}", "\n")
+        tpl = (self.var_template.get().strip() or APP_DEFAULTS["template"]).replace("{newline}", "\n")
         prefix_text = (self.var_prefix_text.get() if self.var_prefix.get() else "").strip()
         sep = self.var_sep.get()
         if item is None:
@@ -898,7 +936,8 @@ class App(ctk.CTk):
                 progress_ms, duration_ms,
                 self.get_int(self.var_bar_len, 20, 4, 60),
                 ps, self.var_ascii.get(),
-                inline_times=inline_times_requested
+                inline_times=inline_times_requested,
+                hud_transparent=self.var_hud_transparent.get()
             )
         else:
             bar = ""
@@ -1079,9 +1118,11 @@ class App(ctk.CTk):
                     if self._send_chatbox(combined):
                         self.last_message = combined; self.last_track_id = track_id
 
+                # --- Anti-AFK pulse ---
                 if self.var_afk_enabled.get() and now >= self.next_afk_at:
-                    if self._send_jump():
-                        self._log("Anti-AFK jump")
+                    ok = self._send_jump() if self.var_afk_mode.get() == "jump" else self._send_wiggle()
+                    if ok:
+                        self._log(f"Anti-AFK pulse ({self.var_afk_mode.get()})")
                     afk_iv = max(5, self.get_int(self.var_afk_interval, self.cfg.get("anti_afk_interval", 240), 5, 3600))
                     self.next_afk_at = now + afk_iv
 
