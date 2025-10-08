@@ -32,9 +32,10 @@ Setup
 Anzeige & Template
 - Platzhalter: {prefix} {title} {artist} {sep} {bar} {position} {duration} {elapsed} {remaining}
 - Titel/Künstler in einer Zeile; Timestamp optional in eigener Zeile („Timestamp on 2nd line“).
+- Progress style: ascii / unicode / hud (HUD-Style mit Zeiten links/rechts in der Bar).
 - Progress bar: per „Progress bar“ ein-/ausblenden. Bar length = Länge.
 - „Clamp long title/artist“ begrenzt Länge (Ellipsis), damit andere Infos sichtbar bleiben.
-- Progress Style: ascii/unicode (Unicode benötigt „Strip non-ASCII“ aus).
+- Unicode benötigt „Strip non-ASCII“ aus.
 - Max. Länge pro Chat-Nachricht: 144 Zeichen (längere Texte werden hart gekürzt).
 
 Rotation
@@ -280,11 +281,26 @@ def ms_to_clock(ms):
     s = int(ms // 1000); m = s // 60; s = s % 60
     return f"{m}:{s:02d}"
 
-def build_bar(position_ms, duration_ms, length_chars, style="ascii", ascii_only=True):
+def build_bar(position_ms, duration_ms, length_chars, style="ascii", ascii_only=True, inline_times=True):
     if duration_ms <= 0:
-        return "[" + "-" * length_chars + "]"
+        core = "-" * length_chars
+        if style == "hud" and not ascii_only and inline_times:
+            return f"0:00 {core} 0:00"
+        return "[" + core + "]"
     f = max(0.0, min(1.0, float(position_ms) / float(duration_ms)))
     filled = int(round(length_chars * f))
+    if style == "hud":
+        if ascii_only:
+            bar = "#" * filled + "-" * (length_chars - filled)
+            if inline_times:
+                return f"{ms_to_clock(position_ms)} [{bar}] {ms_to_clock(duration_ms)}"
+            return "[" + bar + "]"
+        fill = "▉"
+        empty = "░"
+        bar = fill * filled + empty * (length_chars - filled)
+        if inline_times:
+            return f"{ms_to_clock(position_ms)} {bar} {ms_to_clock(duration_ms)}"
+        return bar
     if style == "unicode" and not ascii_only:
         left = "│"; right = "│"; fill = "█"; empty = "░"
         return left + fill * filled + empty * (length_chars - filled) + right
@@ -536,7 +552,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(look, text="Title–Artist sep").grid(row=1, column=1, sticky="e", padx=(18,6))
         ctk.CTkEntry(look, width=160, textvariable=self.var_sep).grid(row=1, column=2, sticky="w")
         ctk.CTkLabel(look, text="Progress style").grid(row=0, column=3, sticky="e", padx=(18,6))
-        ctk.CTkOptionMenu(look, values=["ascii","unicode"], variable=self.var_progress_style, width=130).grid(row=0, column=4, sticky="w")
+        ctk.CTkOptionMenu(look, values=["ascii","unicode","hud"], variable=self.var_progress_style, width=130).grid(row=0, column=4, sticky="w")
 
         opt = ctk.CTkFrame(tab_display); opt.pack(fill="x", padx=12, pady=(12,8))
         ctk.CTkCheckBox(opt, text="Title", variable=self.var_title).grid(row=0, column=0, padx=6, pady=4, sticky="w")
@@ -866,8 +882,16 @@ class App(ctk.CTk):
         raw_title = item.get("name","")
         raw_artist = ", ".join([a.get("name","") for a in item.get("artists",[])])
         title, artist = self._apply_clamp(raw_title, raw_artist)
-        if self.var_show_bar.get():
-            bar = build_bar(progress_ms, duration_ms, self.get_int(self.var_bar_len, 20, 4, 60), self.var_progress_style.get(), self.var_ascii.get())
+        ps = self.var_progress_style.get()
+        show_bar = self.var_show_bar.get()
+        inline_times_requested = (ps == "hud") and self.var_time.get()
+        if show_bar:
+            bar = build_bar(
+                progress_ms, duration_ms,
+                self.get_int(self.var_bar_len, 20, 4, 60),
+                ps, self.var_ascii.get(),
+                inline_times=inline_times_requested
+            )
         else:
             bar = ""
         position = ms_to_clock(progress_ms); duration = ms_to_clock(duration_ms)
@@ -878,7 +902,7 @@ class App(ctk.CTk):
         main = main.replace("{artist}", artist if self.var_artist.get() else "")
         main = main.replace("{sep}", sep if (self.var_title.get() and self.var_artist.get()) else "")
         main = main.replace("{bar}", bar)
-        if self.var_time.get() and not self.var_time_second_line.get():
+        if self.var_time.get() and not self.var_time_second_line.get() and not inline_times_requested:
             main = main.replace("{position}", position).replace("{duration}", duration)
             main = main.replace("{elapsed}", elapsed if self.var_time_mode.get() in ("elapsed","both") else "")
             main = main.replace("{remaining}", ("-" + remaining) if self.var_time_mode.get() in ("remaining","both") else "")
@@ -888,7 +912,7 @@ class App(ctk.CTk):
         main = clamp_ascii(main) if self.var_ascii.get() else main
         main = trim_chatbox(main)
         time_line = ""
-        if self.var_time.get() and self.var_time_second_line.get():
+        if self.var_time.get() and self.var_time_second_line.get() and not inline_times_requested:
             if self.var_time_mode.get() == "elapsed":
                 time_line = elapsed
             elif self.var_time_mode.get() == "remaining":
