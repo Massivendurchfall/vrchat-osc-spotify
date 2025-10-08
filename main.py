@@ -67,6 +67,9 @@ Troubleshooting
 - 401/Refresh-Fehler: „Clear Tokens“ und neu bei Spotify anmelden.
 - 400 bei Token: Redirect URI exakt wie angezeigt verwenden.
 - Unicode/zu lange Texte: ggf. „Strip non-ASCII“ an, Bar-Länge und Clamp-Limits anpassen.
+
+Chatbox-Sound
+- „Chat sound“ schaltet den Sound bei Nachrichten an/aus.
 """
 
 PORTABLE_MODE = True
@@ -129,7 +132,9 @@ APP_DEFAULTS = {
 
     "afk_tag_enabled": False,
     "afk_tag_after": 120,
-    "afk_tag_text": "[AFK]"
+    "afk_tag_text": "[AFK]",
+
+    "chat_sound": True
 }
 
 def _data_dir():
@@ -192,7 +197,6 @@ def config_load():
         except:
             cfg = {}
     out = dict(APP_DEFAULTS); out.update(cfg or {})
-    # ensure new keys exist
     for k, v in APP_DEFAULTS.items():
         if k not in out:
             out[k] = v
@@ -316,7 +320,6 @@ def detect_process_any(substrs):
             pass
     return detect_process_fallback(ls)
 
-# --- System idle time (Windows) ---
 class LASTINPUTINFO(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
 
@@ -332,7 +335,6 @@ def get_idle_seconds():
         pass
     return 0.0
 
-# --- PC specs helpers ---
 def _gpu_from_nvidia_smi():
     try:
         exe = shutil.which("nvidia-smi")
@@ -346,7 +348,6 @@ def _gpu_from_nvidia_smi():
         ).decode("utf-8", "ignore").strip().splitlines()
         if not out:
             return None
-        # Take first GPU
         parts = [p.strip() for p in out[0].split(",")]
         util = float(parts[0]) if parts and parts[0] else None
         name = parts[1] if len(parts) > 1 else ""
@@ -415,8 +416,7 @@ class App(ctk.CTk):
         self.next_rotate_at = time.monotonic()
         self.current_rot_text = ""
         self.next_afk_at = time.monotonic()
-        self._last_specs = ("", 0.0)  # (text, timestamp)
-        # prime cpu
+        self._last_specs = ("", 0.0)
         try:
             if psutil: psutil.cpu_percent(interval=None)
         except Exception:
@@ -492,7 +492,6 @@ class App(ctk.CTk):
         tabs.grid(row=0, column=1, sticky="nsew", padx=(8,12), pady=(12,8))
         tab_display = tabs.add("Display"); tab_rotate = tabs.add("Rotator"); tab_help = tabs.add("Help")
 
-        # Display variables
         self.var_prefix = ctk.BooleanVar(value=self.cfg["prefix"])
         self.var_prefix_text = ctk.StringVar(value=self.cfg["prefix_text"])
         self.var_sep = ctk.StringVar(value=self.cfg["sep_title_artist"])
@@ -528,7 +527,8 @@ class App(ctk.CTk):
         self.var_afk_tag_after = ctk.StringVar(value=str(self.cfg["afk_tag_after"]))
         self.var_afk_tag_text = ctk.StringVar(value=self.cfg["afk_tag_text"])
 
-        # --- Display UI ---
+        self.var_chat_sound = ctk.BooleanVar(value=self.cfg.get("chat_sound", True))
+
         look = ctk.CTkFrame(tab_display); look.pack(fill="x", padx=12, pady=(12,8))
         ctk.CTkCheckBox(look, text='Show prefix', variable=self.var_prefix).grid(row=0, column=0, padx=6, pady=4, sticky="w")
         ctk.CTkLabel(look, text="Prefix text").grid(row=0, column=1, sticky="e", padx=(18,6))
@@ -548,6 +548,7 @@ class App(ctk.CTk):
         ctk.CTkCheckBox(opt, text="Only send on change", variable=self.var_only_changes).grid(row=1, column=1, padx=6, pady=4, sticky="w")
         ctk.CTkLabel(opt, text="Bar length").grid(row=1, column=2, sticky="e", padx=(18,6))
         ctk.CTkEntry(opt, width=110, textvariable=self.var_bar_len).grid(row=1, column=3, sticky="w")
+        ctk.CTkCheckBox(opt, text="Chat sound", variable=self.var_chat_sound).grid(row=1, column=4, padx=6, pady=4, sticky="w")
 
         clampf = ctk.CTkFrame(tab_display); clampf.pack(fill="x", padx=12, pady=(6,8))
         ctk.CTkCheckBox(clampf, text="Clamp long title/artist", variable=self.var_clamp_long).grid(row=0, column=0, padx=6, pady=4, sticky="w")
@@ -583,7 +584,6 @@ class App(ctk.CTk):
         ctk.CTkLabel(tab_display, text="Preview").pack(anchor="w", padx=12)
         ctk.CTkLabel(tab_display, textvariable=self.var_preview, wraplength=790, justify="left").pack(fill="x", padx=12, pady=(0,12))
 
-        # Rotator
         self.var_rot_enabled = ctk.BooleanVar(value=self.cfg["rotation_enabled"])
         self.var_rot_interval = ctk.StringVar(value=str(self.cfg["rotation_interval"]))
         self.var_rot_mode = ctk.StringVar(value=self.cfg.get("rotation_mode", "twoline"))
@@ -681,7 +681,8 @@ class App(ctk.CTk):
             self.var_time_second_line, self.var_ascii, self.var_only_changes, self.var_rot_enabled,
             self.var_clock_line, self.var_clock_24h, self.var_afk_enabled, self.var_show_bar,
             self.var_specs_line, self.var_specs_cpu, self.var_specs_ram, self.var_specs_gpu,
-            self.var_specs_ram_gb, self.var_clamp_long, self.var_afk_tag_enabled
+            self.var_specs_ram_gb, self.var_clamp_long, self.var_afk_tag_enabled,
+            self.var_chat_sound
         ):
             v.trace_add("write", save)
 
@@ -732,7 +733,9 @@ class App(ctk.CTk):
 
             "afk_tag_enabled": bool(self.var_afk_tag_enabled.get()),
             "afk_tag_after": self.get_int(self.var_afk_tag_after, self.cfg.get("afk_tag_after", 120), 10, 36000),
-            "afk_tag_text": self.var_afk_tag_text.get().strip() or "[AFK]"
+            "afk_tag_text": self.var_afk_tag_text.get().strip() or "[AFK]",
+
+            "chat_sound": bool(self.var_chat_sound.get())
         }
         config_save(cfg); self.cfg = cfg
 
@@ -764,6 +767,7 @@ class App(ctk.CTk):
             self.var_afk_tag_enabled.set(self.cfg["afk_tag_enabled"])
             self.var_afk_tag_after.set(str(self.cfg["afk_tag_after"]))
             self.var_afk_tag_text.set(self.cfg["afk_tag_text"])
+            self.var_chat_sound.set(self.cfg["chat_sound"])
             self.rotation_items = list(self.cfg["rotation_items"])
             self._refresh_rot_list(); self._update_preview(); self._save_config()
             self._log("Config reset")
@@ -795,7 +799,8 @@ class App(ctk.CTk):
     def _send_chatbox_raw(self, text):
         self._ensure_osc()
         try:
-            self.osc.send_message(CHATBOX_INPUT, [text, True, True])
+            play_sound = bool(self.var_chat_sound.get())
+            self.osc.send_message(CHATBOX_INPUT, [text, True, play_sound])
         except:
             self.osc.send_message(CHATBOX_INPUT, [text, True])
 
@@ -917,7 +922,6 @@ class App(ctk.CTk):
     def _specs_line(self):
         if not self.var_specs_line.get():
             return ""
-        # simple cache ~1s to avoid calling nvidia-smi too often
         now = time.monotonic()
         cached, ts = self._last_specs
         if now - ts < 1.0 and cached:
@@ -947,7 +951,6 @@ class App(ctk.CTk):
         rot_mode = self.var_rot_mode.get()
         txts = []
         base_line = spotify_main
-        # apply AFK tag on first line only
         base_line = self._afk_tag_if_needed(base_line)
 
         if self.var_rot_enabled.get() and self.current_rot_text:
