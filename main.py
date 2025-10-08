@@ -30,13 +30,14 @@ Setup
 3) Auf „Start“ klicken. Chatbox-Sound und Modus sind automatisch aktiviert.
 
 Anzeige & Template
-- Platzhalter: {prefix} {title} {artist} {sep} {bar} {position} {duration} {elapsed} {remaining}
+- Platzhalter: {prefix} {title} {artist} {sep} {bar} {position} {duration} {elapsed} {remaining} {newline}
+- {newline} fügt einen Zeilenumbruch an dieser Stelle ein.
 - Titel/Künstler in einer Zeile; Timestamp optional in eigener Zeile („Timestamp on 2nd line“).
 - Progress style: ascii / unicode / hud (HUD-Style mit Zeiten links/rechts in der Bar).
 - Progress bar: per „Progress bar“ ein-/ausblenden. Bar length = Länge.
 - „Clamp long title/artist“ begrenzt Länge (Ellipsis), damit andere Infos sichtbar bleiben.
 - Unicode benötigt „Strip non-ASCII“ aus.
-- Max. Länge pro Chat-Nachricht: 144 Zeichen (längere Texte werden hart gekürzt).
+- Max. Länge pro Chat-Nachricht: 144 Zeichen (pro Zeile, längere Zeilen werden gekürzt).
 
 Rotation
 - Enable rotation → wechselt die Einträge im Intervall.
@@ -312,6 +313,12 @@ def clamp_ascii(s):
 
 def trim_chatbox(s):
     return s if len(s) <= MAX_MESSAGE_LEN else s[:MAX_MESSAGE_LEN-1] + "…"
+
+def trim_each_line(s):
+    return "\n".join([trim_chatbox(line) for line in s.splitlines()]).strip()
+
+def normalize_spaces_keep_newlines(s):
+    return "\n".join(" ".join(line.split()) for line in s.splitlines())
 
 def detect_process_fallback(substrs):
     try:
@@ -867,6 +874,7 @@ class App(ctk.CTk):
 
     def _render_spotify_lines(self, item, progress_ms, duration_ms):
         tpl = self.var_template.get().strip() or APP_DEFAULTS["template"]
+        tpl = tpl.replace("{newline}", "\n")
         prefix_text = (self.var_prefix_text.get() if self.var_prefix.get() else "").strip()
         sep = self.var_sep.get()
         if item is None:
@@ -876,9 +884,9 @@ class App(ctk.CTk):
             main = main.replace("{sep}", "" if not sep else sep)
             main = main.replace("{bar}","")
             main = main.replace("{position}","").replace("{duration}","").replace("{elapsed}","").replace("{remaining}","")
-            main = " ".join(main.split())
+            main = normalize_spaces_keep_newlines(main)
             main = clamp_ascii(main) if self.var_ascii.get() else main
-            return trim_chatbox(main), ""
+            return trim_each_line(main), ""
         raw_title = item.get("name","")
         raw_artist = ", ".join([a.get("name","") for a in item.get("artists",[])])
         title, artist = self._apply_clamp(raw_title, raw_artist)
@@ -908,9 +916,9 @@ class App(ctk.CTk):
             main = main.replace("{remaining}", ("-" + remaining) if self.var_time_mode.get() in ("remaining","both") else "")
         else:
             main = main.replace("{position}","").replace("{duration}","").replace("{elapsed}","").replace("{remaining}","")
-        main = " ".join(main.split())
+        main = normalize_spaces_keep_newlines(main)
         main = clamp_ascii(main) if self.var_ascii.get() else main
-        main = trim_chatbox(main)
+        main = trim_each_line(main)
         time_line = ""
         if self.var_time.get() and self.var_time_second_line.get() and not inline_times_requested:
             if self.var_time_mode.get() == "elapsed":
@@ -926,6 +934,7 @@ class App(ctk.CTk):
     def _render_rotation_item(self, txt):
         t = (txt or "").strip()
         if not t: return ""
+        t = t.replace("{newline}", "\n")
         backup = self.var_template.get()
         try:
             self.var_template.set(t)
